@@ -10,7 +10,20 @@ use tokio::{
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("Hello, world!");
-    Ok(())
+
+    let sfpath =
+        String::from("/root/rust/something_chess/res/stockfish/stockfish-ubuntu-20.04-x86-64");
+    let position = "r2qk2r/pp3ppp/B1nbpn2/2pp1b2/Q2P1B2/2P1PN2/PP1N1PPP/R3K2R b KQkq - 4 8";
+    let mut sf = Stockfish::new(&sfpath).await?;
+    sf.start_uci().await?;
+    sf.new_game().await?;
+    sf.set_position(position).await?;
+    sf.go_infinite().await?;
+
+    loop {
+        let line = sf.read_line().await?;
+        println!("{}", line);
+    }
 }
 
 /// ChessEngine trait can be implemented for structures that implement the UCI Protocol

@@ -1,1 +1,5 @@
-/target
+target/
+
+# ignore directory res/stockfish but keep track of it
+res/stockfish/*
+!res/stockfish/.gitkeep
