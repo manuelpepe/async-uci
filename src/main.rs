@@ -1,28 +1,31 @@
-use std::process::Stdio;
+use std::{
+    process::Stdio,
+    sync::{Arc, Mutex},
+};
 
 use anyhow::Result;
 use async_trait::async_trait;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    process::{ChildStdin, ChildStdout, Command},
+    process::{Child, ChildStdin, ChildStdout, Command},
+    task::yield_now,
 };
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    println!("Hello, world!");
-
     let sfpath =
         String::from("/root/rust/something_chess/res/stockfish/stockfish-ubuntu-20.04-x86-64");
     let position = "r2qk2r/pp3ppp/B1nbpn2/2pp1b2/Q2P1B2/2P1PN2/PP1N1PPP/R3K2R b KQkq - 4 8";
-    let mut sf = Stockfish::new(&sfpath).await?;
+    let mut sf = Engine::new(&sfpath).await?;
     sf.start_uci().await?;
     sf.new_game().await?;
     sf.set_position(position).await?;
     sf.go_infinite().await?;
-
     loop {
-        let line = sf.read_line().await?;
-        println!("{}", line);
+        match sf.state.get_line() {
+            Some(l) => println!("{}", l),
+            None => yield_now().await,
+        }
     }
 }
 
@@ -36,70 +39,51 @@ trait ChessEngine: Sized {
     async fn go_infinite(&mut self) -> Result<()>;
 }
 
-/// Stockfish is the most popular Chess Engine
-struct Stockfish {
+/// Engine can be created to spawn any Chess Engine that implements the UCI Protocol
+struct Engine {
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    state: EngineState,
+    proc: Child,
 }
 
-impl Stockfish {
+impl Engine {
     // TODO: These methods could be implemented in a derive trait like 'SimpleEngine'
     async fn send_command(&mut self, command: String) -> Result<()> {
         self.stdin.write_all(command.as_bytes()).await?;
         self.stdin.flush().await?;
         Ok(())
     }
+}
 
-    async fn read_line(&mut self) -> Result<String> {
-        let mut str = String::new();
-        self.stdout.read_line(&mut str).await?;
-        Ok(str.trim().to_string())
-    }
-
-    async fn wait_for_header(&mut self) -> Result<()> {
-        self.read_line().await?;
-        Ok(())
-    }
+fn spawn_process(exe_path: &str) -> Result<(Child, ChildStdin, ChildStdout)> {
+    let mut cmd = Command::new(exe_path);
+    cmd.stdin(Stdio::piped());
+    cmd.stdout(Stdio::piped());
+    let mut proc = cmd.spawn()?;
+    let stdout = proc.stdout.take().expect("no stdout available");
+    let stdin = proc.stdin.take().expect("no stdin available");
+    Ok((proc, stdin, stdout))
 }
 
 #[async_trait]
-impl ChessEngine for Stockfish {
+impl ChessEngine for Engine {
     async fn new(exe_path: &str) -> Result<Self> {
-        let mut cmd = Command::new(exe_path);
-        cmd.stdin(Stdio::piped());
-        cmd.stdout(Stdio::piped());
-        let mut proc = cmd.spawn()?;
-        let stdout = proc.stdout.take().expect("no stdout available");
-        let stdin = proc.stdin.take().expect("no stdin available");
-        let mut sf = Stockfish {
-            stdout: BufReader::new(stdout),
+        let (proc, stdin, stdout) = spawn_process(exe_path)?;
+        let state = EngineState::new(stdout).await;
+        let mut sf = Engine {
+            state: state,
             stdin: stdin,
+            proc: proc,
         };
-        // spawn process polling in separate task to make sure it makes progress.
-        tokio::spawn(async move {
-            let status = proc
-                .wait()
-                .await
-                .expect("engine process encountered an error");
-
-            println!("engine status was: {}", status);
-        });
-        sf.wait_for_header().await?;
+        sf.state.expect_header().await?;
         Ok(sf)
     }
 
     async fn start_uci(&mut self) -> Result<()> {
         self.send_command("uci\n".to_string()).await?;
-        loop {
-            let line = self.read_line().await?;
-            println!("got: {}", &line);
-            if line == "uciok" {
-                break;
-            }
-        }
+        self.state.expect_uciok().await?;
         self.send_command("isready\n".to_string()).await?;
-        let line = self.read_line().await?;
-        assert_eq!(line, "readyok");
+        self.state.expect_readyok().await?;
         Ok(())
     }
 
@@ -107,7 +91,6 @@ impl ChessEngine for Stockfish {
         self.send_command("ucinewgame\n".to_string()).await
     }
 
-    // r2qk2r/pp3ppp/B1nbpn2/2pp1b2/Q2P1B2/2P1PN2/PP1N1PPP/R3K2R b KQkq - 4 8
     async fn set_position(&mut self, fen: &str) -> Result<()> {
         let cmd = format!("position fen {}\n", fen);
         self.send_command(cmd.to_string()).await
@@ -118,11 +101,79 @@ impl ChessEngine for Stockfish {
     }
 }
 
+enum EngineStateEnum {
+    Uninitialized,
+    Ready,
+    Thinking,
+}
+
+struct EngineState {
+    state: EngineStateEnum,
+    queue: Arc<Mutex<Vec<String>>>,
+}
+
+impl EngineState {
+    async fn new(stdout: ChildStdout) -> Self {
+        let queue = Arc::new(Mutex::new(Vec::new()));
+        let mut stdout = BufReader::new(stdout);
+        let state = EngineState {
+            state: EngineStateEnum::Uninitialized,
+            queue: queue.clone(),
+        };
+        let queue = queue.clone();
+        tokio::spawn(async move {
+            loop {
+                let mut str = String::new();
+                stdout.read_line(&mut str).await.unwrap();
+                let line = str.trim().to_string();
+                queue.lock().unwrap().push(line);
+            }
+        });
+        state
+    }
+
+    fn get_line(&mut self) -> Option<String> {
+        self.queue.lock().unwrap().pop()
+    }
+
+    async fn expect_response(&mut self, response: &str) -> Result<()> {
+        loop {
+            match self.get_line() {
+                Some(l) if l.eq(response) => break,
+                _ => yield_now().await,
+            }
+        }
+        Ok(())
+    }
+
+    async fn expect_header(&mut self) -> Result<()> {
+        loop {
+            match self.get_line() {
+                Some(_) => break,
+                None => yield_now().await,
+            }
+        }
+        let _line = self.get_line();
+        Ok(())
+    }
+
+    async fn expect_uciok(&mut self) -> Result<()> {
+        self.expect_response("uciok").await?;
+        Ok(())
+    }
+
+    async fn expect_readyok(&mut self) -> Result<()> {
+        self.expect_response("readyok").await?;
+        self.state = EngineStateEnum::Ready;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod test {
     use anyhow::Result;
 
-    use crate::{ChessEngine, Stockfish};
+    use crate::{ChessEngine, Engine};
 
     macro_rules! test_file {
         ($fname:expr) => {
@@ -132,7 +183,7 @@ mod test {
 
     #[tokio::test]
     async fn test_sf() -> Result<()> {
-        let mut sf = Stockfish::new(test_file!("fakefish.sh")).await?;
+        let mut sf = Engine::new(test_file!("fakefish.sh")).await?;
         sf.start_uci().await?;
         Ok(())
     }
