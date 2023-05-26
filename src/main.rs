@@ -1,10 +1,12 @@
 use std::{
+    fmt::Display,
     process::Stdio,
     sync::{Arc, Mutex},
 };
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use async_trait::async_trait;
+use thiserror::Error;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, ChildStdin, ChildStdout, Command},
@@ -22,10 +24,11 @@ async fn main() -> Result<()> {
     sf.set_position(position).await?;
     sf.go_infinite().await?;
     loop {
-        match sf.state.get_line() {
-            Some(l) => println!("{}", l),
-            None => yield_now().await,
+        match sf.get_evaluation().await {
+            Some(ev) => println!("evaluation is: {ev:?}"),
+            None => println!("no evaluation yet"),
         }
+        yield_now().await;
     }
 }
 
@@ -37,6 +40,7 @@ trait ChessEngine: Sized {
     async fn new_game(&mut self) -> Result<()>;
     async fn set_position(&mut self, position: &str) -> Result<()>;
     async fn go_infinite(&mut self) -> Result<()>;
+    async fn get_evaluation(&mut self) -> Option<Evaluation>;
 }
 
 /// Engine can be created to spawn any Chess Engine that implements the UCI Protocol
@@ -65,25 +69,52 @@ fn spawn_process(exe_path: &str) -> Result<(Child, ChildStdin, ChildStdout)> {
     Ok((proc, stdin, stdout))
 }
 
+impl Engine {
+    async fn _expect_state(&mut self, exp_state: &EngineStateEnum) -> Result<()> {
+        let state = self.state.state.lock().expect("couldn't aquire state lock");
+        if *exp_state == *state {
+            return Ok(());
+        }
+        bail!("engine didn't respond with {:?}", exp_state)
+    }
+
+    async fn expect_state(&mut self, exp_state: EngineStateEnum) -> Result<()> {
+        for _ in 0..10 {
+            match self._expect_state(&exp_state).await {
+                Ok(_) => return Ok(()),
+                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
+            };
+        }
+        bail!("engine didn't respond with {:?}", exp_state)
+    }
+
+    async fn expect_uciok(&mut self) -> Result<()> {
+        self.expect_state(EngineStateEnum::Initialized).await
+    }
+
+    async fn expect_readyok(&mut self) -> Result<()> {
+        self.expect_state(EngineStateEnum::Ready).await
+    }
+}
+
 #[async_trait]
 impl ChessEngine for Engine {
     async fn new(exe_path: &str) -> Result<Self> {
         let (proc, stdin, stdout) = spawn_process(exe_path)?;
         let state = EngineState::new(stdout).await;
-        let mut sf = Engine {
+        let sf = Engine {
             state: state,
             stdin: stdin,
             proc: proc,
         };
-        sf.state.expect_header().await?;
         Ok(sf)
     }
 
     async fn start_uci(&mut self) -> Result<()> {
         self.send_command("uci\n".to_string()).await?;
-        self.state.expect_uciok().await?;
+        self.expect_uciok().await?;
         self.send_command("isready\n".to_string()).await?;
-        self.state.expect_readyok().await?;
+        self.expect_readyok().await?;
         Ok(())
     }
 
@@ -97,76 +128,129 @@ impl ChessEngine for Engine {
     }
 
     async fn go_infinite(&mut self) -> Result<()> {
-        self.send_command("go infinite\n".to_string()).await
+        self.send_command("go infinite\n".to_string()).await?;
+        let mut s = self.state.state.lock().expect("couldn't acquire lock");
+        *s = EngineStateEnum::Thinking;
+        Ok(())
+    }
+
+    async fn get_evaluation(&mut self) -> Option<Evaluation> {
+        let ev = self.state.evaluation.lock().expect("couldn't acquire lock");
+        return match &*ev {
+            Some(e) => Some(e.clone()),
+            None => None,
+        };
     }
 }
 
+#[derive(Debug, Clone)]
+struct Evaluation {
+    score: i8,
+    mate: i8,
+    depth: u8,
+    nodes: u8,
+}
+
+#[derive(PartialEq, Debug)]
 enum EngineStateEnum {
     Uninitialized,
+    Initialized,
     Ready,
     Thinking,
 }
 
 struct EngineState {
-    state: EngineStateEnum,
-    queue: Arc<Mutex<Vec<String>>>,
+    state: Arc<Mutex<EngineStateEnum>>,
+    evaluation: Arc<Mutex<Option<Evaluation>>>,
 }
 
 impl EngineState {
     async fn new(stdout: ChildStdout) -> Self {
-        let queue = Arc::new(Mutex::new(Vec::new()));
+        let ev = Arc::new(Mutex::new(None));
+        let state = Arc::new(Mutex::new(EngineStateEnum::Uninitialized));
         let mut stdout = BufReader::new(stdout);
-        let state = EngineState {
-            state: EngineStateEnum::Uninitialized,
-            queue: queue.clone(),
+        let engstate = EngineState {
+            state: state.clone(),
+            evaluation: ev.clone(),
         };
-        let queue = queue.clone();
+        let ev = ev.clone();
+        let state = state.clone();
         tokio::spawn(async move {
             loop {
                 let mut str = String::new();
                 stdout.read_line(&mut str).await.unwrap();
-                let line = str.trim().to_string();
-                queue.lock().unwrap().push(line);
+                match parse_uci(str) {
+                    Ok(UCI::UciOk) => {
+                        let mut state = state.lock().expect("couldn't aquire state lock");
+                        *state = EngineStateEnum::Initialized;
+                    }
+                    Ok(UCI::ReadyOk) => {
+                        let mut state = state.lock().expect("couldn't aquire state lock");
+                        *state = EngineStateEnum::Ready;
+                    }
+                    Ok(UCI::Info {
+                        score,
+                        mate,
+                        depth,
+                        nodes,
+                    }) => {
+                        let mut ev = ev.lock().expect("couldn't aquire ev lock");
+                        *ev = Some(Evaluation {
+                            score,
+                            mate,
+                            depth,
+                            nodes,
+                        });
+                    }
+                    _ => continue,
+                }
             }
         });
-        state
+        return engstate;
     }
+}
 
-    fn get_line(&mut self) -> Option<String> {
-        self.queue.lock().unwrap().pop()
-    }
+enum UCI {
+    Header,
+    UciOk,
+    ReadyOk,
+    Info {
+        score: i8,
+        mate: i8,
+        depth: u8,
+        nodes: u8,
+    },
+}
 
-    async fn expect_response(&mut self, response: &str) -> Result<()> {
-        loop {
-            match self.get_line() {
-                Some(l) if l.eq(response) => break,
-                _ => yield_now().await,
-            }
-        }
+#[derive(Error, Debug)]
+enum UCIError {
+    ParseError,
+}
+
+impl Display for UCIError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let data = match self {
+            UCIError::ParseError => "error parsing uci command",
+        };
+        f.write_str(data)?;
         Ok(())
     }
+}
 
-    async fn expect_header(&mut self) -> Result<()> {
-        loop {
-            match self.get_line() {
-                Some(_) => break,
-                None => yield_now().await,
-            }
-        }
-        let _line = self.get_line();
-        Ok(())
+fn parse_uci(line: String) -> Result<UCI> {
+    if line.starts_with("info") {
+        return Ok(UCI::Info {
+            score: 1,
+            mate: 1,
+            depth: 1,
+            nodes: 1,
+        });
+    } else if line.starts_with("uciok") {
+        return Ok(UCI::UciOk);
+    } else if line.starts_with("readyok") {
+        return Ok(UCI::ReadyOk);
     }
-
-    async fn expect_uciok(&mut self) -> Result<()> {
-        self.expect_response("uciok").await?;
-        Ok(())
-    }
-
-    async fn expect_readyok(&mut self) -> Result<()> {
-        self.expect_response("readyok").await?;
-        self.state = EngineStateEnum::Ready;
-        Ok(())
-    }
+    bail!(UCIError::ParseError)
 }
 
 #[cfg(test)]
