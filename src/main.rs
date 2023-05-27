@@ -1,7 +1,9 @@
 use anyhow::{bail, Result};
 use async_trait::async_trait;
+use clap::Parser;
 use parse::{parse_uci, UCI};
 use std::{
+    fmt::Display,
     process::Stdio,
     sync::{Arc, Mutex},
 };
@@ -10,32 +12,29 @@ use tokio::{
     process::{Child, ChildStdin, ChildStdout, Command},
     task::yield_now,
 };
+
+mod cli;
 mod parse;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args = cli::CLIArgs::parse();
     let sfpath =
         String::from("/root/rust/something_chess/res/stockfish/stockfish-ubuntu-20.04-x86-64");
-    let position = "r2qk2r/pp3ppp/B1nbpn2/2pp1b2/Q2P1B2/2P1PN2/PP1N1PPP/R3K2R b KQkq - 4 8";
     let mut sf = Engine::new(&sfpath).await?;
     sf.start_uci().await?;
     sf.new_game().await?;
-    sf.set_position(position).await?;
+    sf.set_position(&args.fen).await?;
     sf.go_infinite().await?;
-    let mut last_eval = Evaluation {
-        score: 0,
-        mate: 0,
-        depth: 0,
-        nodes: 0,
-        time: 0,
-        multipv: 0,
-        seldepth: 0,
-        pv: vec![],
-    };
+    let mut last_eval = Evaluation::default();
     loop {
         match sf.get_evaluation().await {
             Some(ev) if ev != last_eval => {
-                println!("evaluation is: {ev:?}");
+                if args.show_moves {
+                    println!("{:#}", ev);
+                } else {
+                    println!("{:}", ev)
+                }
                 last_eval = ev;
             }
             _ => {} //println!("no evaluation yet"),
@@ -175,6 +174,35 @@ impl Default for Evaluation {
             multipv: 0,
             pv: vec![],
             time: 0,
+        }
+    }
+}
+
+impl Display for Evaluation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if f.alternate() {
+            f.write_fmt(format_args!(
+                "score: {} mate: {} depth: {} nodes: {} seldepth: {} multipv: {} time: {} \npv: {:?}",
+                self.score,
+                self.mate,
+                self.depth,
+                self.nodes,
+                self.seldepth,
+                self.multipv,
+                self.time,
+                self.pv
+            ))
+        } else {
+            f.write_fmt(format_args!(
+                "score: {} mate: {} depth: {} nodes: {} seldepth: {} multipv: {} time: {}",
+                self.score,
+                self.mate,
+                self.depth,
+                self.nodes,
+                self.seldepth,
+                self.multipv,
+                self.time
+            ))
         }
     }
 }
