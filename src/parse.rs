@@ -14,6 +14,7 @@ pub enum UCI {
         nodes: Option<isize>,
         time: Option<isize>,
         multipv: Option<isize>,
+        pv: Option<Vec<String>>,
     },
 }
 
@@ -68,7 +69,21 @@ fn parse_info_line(line: String) -> Result<UCI> {
         time: values["time"],
         multipv: values["multipv"],
         seldepth: values["seldepth"],
+        pv: parse_pv(line),
     });
+}
+
+fn parse_pv(line: Vec<&str>) -> Option<Vec<String>> {
+    let mut pv = Vec::new();
+    let mut i = line.iter();
+    match i.position(|x: &&str| *x == "pv") {
+        Some(_) => {}
+        None => return None,
+    };
+    while let Some(word) = i.next() {
+        pv.push(word.to_string());
+    }
+    Some(pv)
 }
 
 #[cfg(test)]
@@ -86,6 +101,18 @@ mod test {
 
     #[tokio::test]
     async fn test_parse_info_line() -> Result<()> {
+        test_info_line!("info depth 1 seldepth 1 multipv 1 score cp 59 nodes 56 nps 56000 hashfull 0 tbhits 0 time 1", 
+            UCI::Info {
+                cp: Some(59),
+                mate: None,
+                depth: Some(1),
+                nodes: Some(56),
+                seldepth: Some(1),
+                multipv: Some(1),
+                time: Some(1),
+                pv: None,
+            }
+        );
         test_info_line!("info depth 1 seldepth 1 multipv 1 score cp 59 nodes 56 nps 56000 hashfull 0 tbhits 0 time 1 pv d6f4 e3f4", 
             UCI::Info {
                 cp: Some(59),
@@ -95,6 +122,7 @@ mod test {
                 seldepth: Some(1),
                 multipv: Some(1),
                 time: Some(1),
+                pv: Some(vec!["d6f4".to_string(), "e3f4".to_string()]),
             }
         );
         test_info_line!(
@@ -107,11 +135,11 @@ mod test {
                 seldepth: Some(2),
                 multipv: Some(1),
                 time: Some(1),
+                pv: Some(vec!["a8b8".to_string(), "f4d6".to_string()]),
             }
         );
         test_info_line!(
-            "info depth 24 seldepth 33 multipv 1 score cp -195 nodes 2499457 nps 642203 hashfull 812 tbhits 0 time 3892 pv d8a5 a4a5 c6a5 f4d6 b7a6 d6c5 f6d7 c5
-a3 f7f6 e1g1 a8c8 b2b3 e8f7 f1c1 d7b6 f3e1 f5g6 f2f3 h8d8 e3e4 a5c6 e1d3 e6e5 d3c5 d5e4 d2e4 g6e4 c5e4",
+            "info depth 24 seldepth 33 multipv 1 score cp -195 nodes 2499457 nps 642203 hashfull 812 tbhits 0 time 3892 pv d8a5 a4a5 c6a5 f4d6 b7a6 d6c5 f6d7 c5a3 f7f6 e1g1 a8c8 b2b3 e8f7 f1c1 d7b6 f3e1 f5g6 f2f3 h8d8 e3e4 a5c6 e1d3 e6e5 d3c5 d5e4 d2e4 g6e4 c5e4",
             UCI::Info {
                 cp: Some(-195),
                 mate: None,
@@ -120,6 +148,36 @@ a3 f7f6 e1g1 a8c8 b2b3 e8f7 f1c1 d7b6 f3e1 f5g6 f2f3 h8d8 e3e4 a5c6 e1d3 e6e5 d3
                 seldepth: Some(33),
                 multipv: Some(1),
                 time: Some(3892),
+                pv: Some(vec![
+                    "d8a5".to_string(),
+                    "a4a5".to_string(),
+                    "c6a5".to_string(),
+                    "f4d6".to_string(),
+                    "b7a6".to_string(),
+                    "d6c5".to_string(),
+                    "f6d7".to_string(),
+                    "c5a3".to_string(),
+                    "f7f6".to_string(),
+                    "e1g1".to_string(),
+                    "a8c8".to_string(),
+                    "b2b3".to_string(),
+                    "e8f7".to_string(),
+                    "f1c1".to_string(),
+                    "d7b6".to_string(),
+                    "f3e1".to_string(),
+                    "f5g6".to_string(),
+                    "f2f3".to_string(),
+                    "h8d8".to_string(),
+                    "e3e4".to_string(),
+                    "a5c6".to_string(),
+                    "e1d3".to_string(),
+                    "e6e5".to_string(),
+                    "d3c5".to_string(),
+                    "d5e4".to_string(),
+                    "d2e4".to_string(),
+                    "g6e4".to_string(),
+                    "c5e4".to_string(),
+                ]),
             }
         );
         Ok(())

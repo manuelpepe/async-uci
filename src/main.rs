@@ -209,6 +209,7 @@ impl EngineState {
                         seldepth,
                         time,
                         multipv,
+                        pv,
                     }) => {
                         let mut ev = ev.lock().expect("couldn't aquire ev lock");
                         let def_ev = Evaluation {
@@ -232,7 +233,7 @@ impl EngineState {
                             nodes: nodes.unwrap_or(prev_ev.nodes),
                             seldepth: seldepth.unwrap_or(prev_ev.seldepth),
                             multipv: multipv.unwrap_or(prev_ev.multipv),
-                            pv: prev_ev.pv.clone(), // TODO: implement pv
+                            pv: pv.unwrap_or(prev_ev.pv.clone()),
                             time: time.unwrap_or(prev_ev.time),
                         });
                     }
