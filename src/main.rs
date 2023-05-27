@@ -27,6 +27,10 @@ async fn main() -> Result<()> {
         mate: 0,
         depth: 0,
         nodes: 0,
+        time: 0,
+        multipv: 0,
+        seldepth: 0,
+        pv: vec![],
     };
     loop {
         match sf.get_evaluation().await {
@@ -154,6 +158,10 @@ struct Evaluation {
     mate: isize,
     depth: isize,
     nodes: isize,
+    seldepth: isize,
+    multipv: isize,
+    pv: Vec<String>,
+    time: isize,
 }
 
 #[derive(PartialEq, Debug)]
@@ -194,10 +202,13 @@ impl EngineState {
                         *state = EngineStateEnum::Ready;
                     }
                     Ok(UCI::Info {
-                        score,
+                        cp,
                         mate,
                         depth,
                         nodes,
+                        seldepth,
+                        time,
+                        multipv,
                     }) => {
                         let mut ev = ev.lock().expect("couldn't aquire ev lock");
                         let def_ev = Evaluation {
@@ -205,16 +216,24 @@ impl EngineState {
                             mate: 0,
                             depth: 0,
                             nodes: 0,
+                            seldepth: 0,
+                            multipv: 0,
+                            pv: vec![],
+                            time: 0,
                         };
                         let prev_ev = match ev.as_ref() {
                             Some(ev) => ev,
                             None => &def_ev,
                         };
                         *ev = Some(Evaluation {
-                            score: score.unwrap_or(prev_ev.score),
+                            score: cp.unwrap_or(prev_ev.score),
                             mate: mate.unwrap_or(prev_ev.mate),
                             depth: depth.unwrap_or(prev_ev.depth),
                             nodes: nodes.unwrap_or(prev_ev.nodes),
+                            seldepth: seldepth.unwrap_or(prev_ev.seldepth),
+                            multipv: multipv.unwrap_or(prev_ev.multipv),
+                            pv: prev_ev.pv.clone(), // TODO: implement pv
+                            time: time.unwrap_or(prev_ev.time),
                         });
                     }
                     _ => continue,
