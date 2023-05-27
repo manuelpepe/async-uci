@@ -1,11 +1,10 @@
+use anyhow::{bail, Result};
+use async_trait::async_trait;
 use std::{
     fmt::Display,
     process::Stdio,
     sync::{Arc, Mutex},
 };
-
-use anyhow::{bail, Result};
-use async_trait::async_trait;
 use thiserror::Error;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -23,10 +22,19 @@ async fn main() -> Result<()> {
     sf.new_game().await?;
     sf.set_position(position).await?;
     sf.go_infinite().await?;
+    let mut last_eval = Evaluation {
+        score: 0,
+        mate: 0,
+        depth: 0,
+        nodes: 0,
+    };
     loop {
         match sf.get_evaluation().await {
-            Some(ev) => println!("evaluation is: {ev:?}"),
-            None => println!("no evaluation yet"),
+            Some(ev) if ev != last_eval => {
+                println!("evaluation is: {ev:?}");
+                last_eval = ev;
+            }
+            _ => {} //println!("no evaluation yet"),
         }
         yield_now().await;
     }
@@ -47,16 +55,7 @@ trait ChessEngine: Sized {
 struct Engine {
     stdin: ChildStdin,
     state: EngineState,
-    proc: Child,
-}
-
-impl Engine {
-    // TODO: These methods could be implemented in a derive trait like 'SimpleEngine'
-    async fn send_command(&mut self, command: String) -> Result<()> {
-        self.stdin.write_all(command.as_bytes()).await?;
-        self.stdin.flush().await?;
-        Ok(())
-    }
+    _proc: Child,
 }
 
 fn spawn_process(exe_path: &str) -> Result<(Child, ChildStdin, ChildStdout)> {
@@ -70,6 +69,12 @@ fn spawn_process(exe_path: &str) -> Result<(Child, ChildStdin, ChildStdout)> {
 }
 
 impl Engine {
+    async fn send_command(&mut self, command: String) -> Result<()> {
+        self.stdin.write_all(command.as_bytes()).await?;
+        self.stdin.flush().await?;
+        Ok(())
+    }
+
     async fn _expect_state(&mut self, exp_state: &EngineStateEnum) -> Result<()> {
         let state = self.state.state.lock().expect("couldn't aquire state lock");
         if *exp_state == *state {
@@ -105,7 +110,7 @@ impl ChessEngine for Engine {
         let sf = Engine {
             state: state,
             stdin: stdin,
-            proc: proc,
+            _proc: proc,
         };
         Ok(sf)
     }
@@ -143,12 +148,12 @@ impl ChessEngine for Engine {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct Evaluation {
-    score: i8,
-    mate: i8,
-    depth: u8,
-    nodes: u8,
+    score: isize,
+    mate: isize,
+    depth: isize,
+    nodes: isize,
 }
 
 #[derive(PartialEq, Debug)]
@@ -195,11 +200,21 @@ impl EngineState {
                         nodes,
                     }) => {
                         let mut ev = ev.lock().expect("couldn't aquire ev lock");
+                        let def_ev = Evaluation {
+                            score: 0,
+                            mate: 0,
+                            depth: 0,
+                            nodes: 0,
+                        };
+                        let prev_ev = match ev.as_ref() {
+                            Some(ev) => ev,
+                            None => &def_ev,
+                        };
                         *ev = Some(Evaluation {
-                            score,
-                            mate,
-                            depth,
-                            nodes,
+                            score: score.unwrap_or(prev_ev.score),
+                            mate: mate.unwrap_or(prev_ev.mate),
+                            depth: depth.unwrap_or(prev_ev.depth),
+                            nodes: nodes.unwrap_or(prev_ev.nodes),
                         });
                     }
                     _ => continue,
@@ -210,15 +225,15 @@ impl EngineState {
     }
 }
 
+#[derive(PartialEq, Debug)]
 enum UCI {
-    Header,
     UciOk,
     ReadyOk,
     Info {
-        score: i8,
-        mate: i8,
-        depth: u8,
-        nodes: u8,
+        score: Option<isize>,
+        mate: Option<isize>,
+        depth: Option<isize>,
+        nodes: Option<isize>,
     },
 }
 
@@ -239,12 +254,10 @@ impl Display for UCIError {
 
 fn parse_uci(line: String) -> Result<UCI> {
     if line.starts_with("info") {
-        return Ok(UCI::Info {
-            score: 1,
-            mate: 1,
-            depth: 1,
-            nodes: 1,
-        });
+        match parse_info_line(line) {
+            Ok(info) => return Ok(info),
+            Err(_) => return Err(UCIError::ParseError.into()),
+        }
     } else if line.starts_with("uciok") {
         return Ok(UCI::UciOk);
     } else if line.starts_with("readyok") {
@@ -253,11 +266,36 @@ fn parse_uci(line: String) -> Result<UCI> {
     bail!(UCIError::ParseError)
 }
 
+fn parse_info_line(line: String) -> Result<UCI> {
+    // TODO: this is a bit of a hack, but it works for now
+    // thanks copilot for recommending the above comment.
+    let line: Vec<&str> = line.split_whitespace().collect();
+    let words = vec!["cp", "depth", "nodes"];
+    let mut values = Vec::with_capacity(words.len());
+    for _ in 0..words.len() {
+        values.push(None);
+    }
+    for (wix, word) in words.iter().enumerate() {
+        let mut i = line.iter();
+        let value = match i.position(|x: &&str| x == word) {
+            Some(ix) => line[ix + 1].parse::<isize>().ok(),
+            None => None,
+        };
+        values[wix] = value;
+    }
+    return Ok(UCI::Info {
+        score: values[0],
+        mate: None,
+        depth: values[1],
+        nodes: values[2],
+    });
+}
+
 #[cfg(test)]
 mod test {
     use anyhow::Result;
 
-    use crate::{ChessEngine, Engine};
+    use crate::{parse_info_line, ChessEngine, Engine, UCI};
 
     macro_rules! test_file {
         ($fname:expr) => {
@@ -269,6 +307,45 @@ mod test {
     async fn test_sf() -> Result<()> {
         let mut sf = Engine::new(test_file!("fakefish.sh")).await?;
         sf.start_uci().await?;
+        Ok(())
+    }
+
+    macro_rules! test_info_line {
+        ($line:expr, $ev:expr) => {
+            let ev = parse_info_line($line.to_string())?;
+            assert_eq!(ev, $ev);
+        };
+    }
+
+    #[tokio::test]
+    async fn test_parse_info_line() -> Result<()> {
+        test_info_line!("info depth 1 seldepth 1 multipv 1 score cp 59 nodes 56 nps 56000 hashfull 0 tbhits 0 time 1 pv d6f4 e3f4", 
+            UCI::Info {
+                score: Some(59),
+                mate: None,
+                depth: Some(1),
+                nodes: Some(56),
+            }
+        );
+        test_info_line!(
+            "info depth 2 seldepth 2 multipv 1 score cp -27 nodes 227 nps 227000 hashfull 0 tbhits 0 time 1 pv a8b8 f4d6",
+            UCI::Info {
+                score: Some(-27),
+                mate: None,
+                depth: Some(2),
+                nodes: Some(227),
+            }
+        );
+        test_info_line!(
+            "info depth 24 seldepth 33 multipv 1 score cp -195 nodes 2499457 nps 642203 hashfull 812 tbhits 0 time 3892 pv d8a5 a4a5 c6a5 f4d6 b7a6 d6c5 f6d7 c5
+a3 f7f6 e1g1 a8c8 b2b3 e8f7 f1c1 d7b6 f3e1 f5g6 f2f3 h8d8 e3e4 a5c6 e1d3 e6e5 d3c5 d5e4 d2e4 g6e4 c5e4",
+            UCI::Info {
+                score: Some(-195),
+                mate: None,
+                depth: Some(24),
+                nodes: Some(2499457),
+            }
+        );
         Ok(())
     }
 }
