@@ -164,6 +164,21 @@ struct Evaluation {
     time: isize,
 }
 
+impl Default for Evaluation {
+    fn default() -> Self {
+        Evaluation {
+            score: 0,
+            mate: 0,
+            depth: 0,
+            nodes: 0,
+            seldepth: 0,
+            multipv: 0,
+            pv: vec![],
+            time: 0,
+        }
+    }
+}
+
 #[derive(PartialEq, Debug)]
 enum EngineStateEnum {
     Uninitialized,
@@ -212,16 +227,7 @@ impl EngineState {
                         pv,
                     }) => {
                         let mut ev = ev.lock().expect("couldn't aquire ev lock");
-                        let def_ev = Evaluation {
-                            score: 0,
-                            mate: 0,
-                            depth: 0,
-                            nodes: 0,
-                            seldepth: 0,
-                            multipv: 0,
-                            pv: vec![],
-                            time: 0,
-                        };
+                        let def_ev = Evaluation::default();
                         let prev_ev = match ev.as_ref() {
                             Some(ev) => ev,
                             None => &def_ev,
@@ -244,6 +250,7 @@ impl EngineState {
         return engstate;
     }
 }
+
 #[cfg(test)]
 mod test {
     use anyhow::Result;
