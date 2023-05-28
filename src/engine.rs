@@ -14,11 +14,22 @@ use tokio::{
 /// ChessEngine trait can be implemented for structures that implement the UCI Protocol
 #[async_trait]
 pub trait ChessEngine: Sized {
+    /// Create new engine from executable
     async fn new(exe_path: &str) -> Result<Self>;
+
+    /// Start the UCI Protocol
     async fn start_uci(&mut self) -> Result<()>;
+
+    /// Notify engine of new game start
     async fn new_game(&mut self) -> Result<()>;
+
+    /// Notify engine of new position to search
     async fn set_position(&mut self, position: &str) -> Result<()>;
+
+    /// Notify engine to search for best move until explicitly stopped
     async fn go_infinite(&mut self) -> Result<()>;
+
+    /// Retrieve the latest evaluation from the engine
     async fn get_evaluation(&mut self) -> Option<Evaluation>;
 }
 
@@ -30,12 +41,14 @@ pub struct Engine {
 }
 
 impl Engine {
+    /// Send a command to the engine
     async fn send_command(&mut self, command: String) -> Result<()> {
         self.stdin.write_all(command.as_bytes()).await?;
         self.stdin.flush().await?;
         Ok(())
     }
 
+    /// Check if the expected state is the current engine state
     async fn _expect_state(&mut self, exp_state: &EngineStateEnum) -> Result<()> {
         let state = self.state.state.lock().expect("couldn't aquire state lock");
         if *exp_state == *state {
@@ -44,6 +57,8 @@ impl Engine {
         bail!("engine didn't respond with {:?}", exp_state)
     }
 
+    /// Check if the expected state is the current engine state, retries a couple of times
+    /// waiting between attempts.
     async fn expect_state(&mut self, exp_state: EngineStateEnum) -> Result<()> {
         for _ in 0..10 {
             match self._expect_state(&exp_state).await {
@@ -54,15 +69,18 @@ impl Engine {
         bail!("engine didn't respond with {:?}", exp_state)
     }
 
+    /// Check if the engine initialized UCI
     async fn expect_uciok(&mut self) -> Result<()> {
         self.expect_state(EngineStateEnum::Initialized).await
     }
 
+    /// Check if the engine is ready to receive commands
     async fn expect_readyok(&mut self) -> Result<()> {
         self.expect_state(EngineStateEnum::Ready).await
     }
 }
 
+/// Spawn a subprocess and return handles for stdin and stdout
 fn spawn_process(exe_path: &str) -> Result<(Child, ChildStdin, ChildStdout)> {
     let mut cmd = Command::new(exe_path);
     cmd.stdin(Stdio::piped());
@@ -78,12 +96,11 @@ impl ChessEngine for Engine {
     async fn new(exe_path: &str) -> Result<Self> {
         let (proc, stdin, stdout) = spawn_process(exe_path)?;
         let state = EngineState::new(stdout).await;
-        let sf = Engine {
+        Ok(Engine {
             state: state,
             stdin: stdin,
             _proc: proc,
-        };
-        Ok(sf)
+        })
     }
 
     async fn start_uci(&mut self) -> Result<()> {
@@ -119,6 +136,7 @@ impl ChessEngine for Engine {
     }
 }
 
+/// Engine evaluation info
 #[derive(Debug, Clone, PartialEq)]
 pub struct Evaluation {
     score: isize,
@@ -132,6 +150,7 @@ pub struct Evaluation {
 }
 
 impl Default for Evaluation {
+    /// Create evaluation with empty values
     fn default() -> Self {
         Evaluation {
             score: 0,
@@ -147,6 +166,7 @@ impl Default for Evaluation {
 }
 
 impl Display for Evaluation {
+    /// The alternate ("{:#}") operator will add the moves in pv to the output
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if f.alternate() {
             f.write_fmt(format_args!(
@@ -175,6 +195,7 @@ impl Display for Evaluation {
     }
 }
 
+/// Posible engine states
 #[derive(PartialEq, Debug)]
 enum EngineStateEnum {
     Uninitialized,
@@ -183,6 +204,7 @@ enum EngineStateEnum {
     Thinking,
 }
 
+/// Engine state handler with async stdout parsing
 struct EngineState {
     state: Arc<Mutex<EngineStateEnum>>,
     evaluation: Arc<Mutex<Option<Evaluation>>>,

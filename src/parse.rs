@@ -1,11 +1,17 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 use std::{collections::HashMap, fmt::Display};
 use thiserror::Error;
 
+/// Supported UCI commands
 #[derive(PartialEq, Debug)]
 pub enum UCI {
+    /// Sent after the 'uci' command
     UciOk,
+
+    /// Sent after the 'isready' command
     ReadyOk,
+
+    /// Engine sending info to GUI
     Info {
         cp: Option<isize>,
         mate: Option<isize>,
@@ -20,6 +26,7 @@ pub enum UCI {
 
 #[derive(Error, Debug)]
 pub enum UCIError {
+    /// Error parsing a UCI command
     ParseError,
 }
 
@@ -28,25 +35,26 @@ impl Display for UCIError {
         let data = match self {
             UCIError::ParseError => "error parsing uci command",
         };
-        f.write_str(data)?;
-        Ok(())
+        return f.write_str(data);
     }
 }
 
+/// Parse an UCI command
 pub fn parse_uci(line: String) -> Result<UCI> {
     if line.starts_with("info") {
-        match parse_info_line(line) {
-            Ok(info) => return Ok(info),
-            Err(_) => return Err(UCIError::ParseError.into()),
-        }
+        return match parse_info_line(line) {
+            Ok(info) => Ok(info),
+            Err(_) => Err(UCIError::ParseError.into()),
+        };
     } else if line.starts_with("uciok") {
         return Ok(UCI::UciOk);
     } else if line.starts_with("readyok") {
         return Ok(UCI::ReadyOk);
     }
-    bail!(UCIError::ParseError)
+    return Err(UCIError::ParseError.into());
 }
 
+/// Parse an info line for all supported metadata
 fn parse_info_line(line: String) -> Result<UCI> {
     let line: Vec<&str> = line.split_whitespace().collect();
     let words = vec![
@@ -73,12 +81,13 @@ fn parse_info_line(line: String) -> Result<UCI> {
     });
 }
 
+/// Parse an info line and return all the moves stated after 'pv'
 fn parse_pv(line: Vec<&str>) -> Option<Vec<String>> {
     let mut pv = Vec::new();
     let mut i = line.iter();
     match i.position(|x: &&str| *x == "pv") {
         Some(_) => {}
-        None => return None,
+        None => return None, // early return if no pv is found
     };
     while let Some(word) = i.next() {
         pv.push(word.to_string());
