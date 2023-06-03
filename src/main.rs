@@ -11,10 +11,12 @@ mod parse;
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = CLIArgs::parse();
+    // TODO: Load from env
     let engpath =
         String::from("/root/rust/something_chess/res/stockfish/stockfish-ubuntu-20.04-x86-64");
-    let mut sf = spawn_engine(engpath, args.fen).await.unwrap();
-    stream_engine_eval(&mut sf, args.show_moves).await.unwrap();
+    let mut sf = spawn_engine(engpath, args.fen).await?;
+    print_options(&mut sf).await?;
+    stream_engine_eval(&mut sf, args.show_moves).await?;
     Ok(())
 }
 
@@ -25,6 +27,14 @@ async fn spawn_engine(path: String, fen: String) -> Result<Engine> {
     eng.set_position(&fen).await?;
     eng.go_infinite().await?;
     Ok(eng)
+}
+
+async fn print_options(engine: &mut Engine) -> Result<()> {
+    let options = engine.get_options().await?;
+    for opt in options {
+        println!("{:?}", opt);
+    }
+    Ok(())
 }
 
 async fn stream_engine_eval(engine: &mut Engine, show_moves: bool) -> Result<()> {

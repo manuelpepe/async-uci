@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::{collections::HashMap, fmt::Display};
+use std::{collections::HashMap, fmt::Display, str::FromStr};
 use thiserror::Error;
 
 /// Supported UCI commands
@@ -22,8 +22,93 @@ pub enum UCI {
         multipv: Option<isize>,
         pv: Option<Vec<String>>,
     },
+
+    /// Options can be set to modify the engine behaviour
+    Option { name: String, opt_type: OptionType },
 }
 
+/// Possible types for Engine Options
+#[derive(PartialEq, Debug, Clone)]
+pub enum OptionType {
+    Check {
+        default: bool,
+    },
+    Spin {
+        default: isize,
+        min: isize,
+        max: isize,
+    },
+    Combo {
+        default: String,
+        options: Vec<String>,
+    },
+    Button,
+    String {
+        default: String,
+    },
+}
+
+impl OptionType {
+    fn new(opt_type: String, line: String) -> Result<Self> {
+        Ok(match opt_type.as_str() {
+            "check" => OptionType::new_check(line)?,
+            "spin" => OptionType::new_spin(line)?,
+            "combo" => OptionType::new_combo(line)?,
+            "button" => OptionType::new_button()?,
+            "string" => OptionType::new_string(line)?,
+            _ => return Err(UCIError::ParseError.into()),
+        })
+    }
+
+    fn new_check(line: String) -> Result<Self> {
+        let words = vec!["default"];
+        let values = parse_line_values(line, words)?;
+        Ok(OptionType::Check {
+            default: values["default"].unwrap(),
+        })
+    }
+
+    fn new_spin(line: String) -> Result<Self> {
+        let words = vec!["default", "min", "max"];
+        let values = parse_line_values(line, words)?;
+        Ok(OptionType::Spin {
+            default: values["default"].unwrap(),
+            min: values["min"].unwrap(),
+            max: values["max"].unwrap(),
+        })
+    }
+
+    fn new_combo(line: String) -> Result<Self> {
+        let words = vec!["default"];
+        let values = parse_line_values(line.clone(), words)?;
+        let line: Vec<&str> = line.split_whitespace().collect();
+        let mut options = Vec::new();
+        // TODO: Check if combo options can have spaces, in which case this will give incorrect results
+        for ix in 0..line.len() {
+            if line[ix] == "var" {
+                options.push(line[ix + 1].to_string());
+            }
+        }
+        Ok(OptionType::Combo {
+            default: values["default"].clone().unwrap(),
+            options: options,
+        })
+    }
+
+    fn new_button() -> Result<Self> {
+        Ok(OptionType::Button)
+    }
+
+    fn new_string(line: String) -> Result<Self> {
+        let words = vec!["default"];
+        let values = parse_line_values(line, words)?;
+        Ok(OptionType::String {
+            default: values["default"].clone().unwrap(),
+        })
+    }
+}
+
+/// Errors produced from UCI parsing
 #[derive(Error, Debug)]
 pub enum UCIError {
     /// Error parsing a UCI command
@@ -41,34 +126,44 @@ impl Display for UCIError {
 
 /// Parse an UCI command
 pub fn parse_uci(line: String) -> Result<UCI> {
-    if line.starts_with("info") {
-        return match parse_info_line(line) {
-            Ok(info) => Ok(info),
-            Err(_) => Err(UCIError::ParseError.into()),
-        };
-    } else if line.starts_with("uciok") {
-        return Ok(UCI::UciOk);
-    } else if line.starts_with("readyok") {
-        return Ok(UCI::ReadyOk);
+    let line = line.trim().to_string();
+    let command = line.split_whitespace().next().unwrap_or("");
+    match command {
+        "info" => parse_info_line(line),
+        "uciok" => Ok(UCI::UciOk),
+        "readyok" => Ok(UCI::ReadyOk),
+        "option" => parse_option_line(line),
+        _ => Err(UCIError::ParseError.into()),
     }
-    return Err(UCIError::ParseError.into());
 }
 
-/// Parse an info line for all supported metadata
-fn parse_info_line(line: String) -> Result<UCI> {
+/// parse_line_values parses the value following each word in the given line.
+fn parse_line_values<T: FromStr + Default>(
+    line: String,
+    words: Vec<&str>,
+) -> Result<HashMap<String, Option<T>>> {
     let line: Vec<&str> = line.split_whitespace().collect();
-    let words = vec![
-        "cp", "depth", "nodes", "seldepth", "mate", "time", "multipv",
-    ];
     let mut values = HashMap::with_capacity(words.len());
     for word in words.iter() {
         let mut i = line.iter();
         let value = match i.position(|x: &&str| x == word) {
-            Some(ix) => line[ix + 1].parse::<isize>().ok(),
+            Some(ix) => match line.get(ix + 1) {
+                Some(v) => v.parse::<T>().ok(),
+                None => Some(T::default()),
+            },
             None => None,
         };
-        values.insert(word.to_owned(), value);
+        values.insert(word.to_string(), value);
     }
+    Ok(values)
+}
+
+/// Parse an info line for all supported metadata
+fn parse_info_line(line: String) -> Result<UCI> {
+    let words = vec![
+        "cp", "depth", "nodes", "seldepth", "mate", "time", "multipv",
+    ];
+    let values = parse_line_values(line.clone(), words)?;
     return Ok(UCI::Info {
         cp: values["cp"],
         mate: values["mate"],
@@ -82,7 +177,8 @@ fn parse_info_line(line: String) -> Result<UCI> {
 }
 
 /// Parse an info line and return all the moves stated after 'pv'
-fn parse_pv(line: Vec<&str>) -> Option<Vec<String>> {
+fn parse_pv(line: String) -> Option<Vec<String>> {
+    let line: Vec<&str> = line.split_whitespace().collect();
     let mut pv = Vec::new();
     let mut i = line.iter();
     match i.position(|x: &&str| *x == "pv") {
@@ -93,6 +189,16 @@ fn parse_pv(line: Vec<&str>) -> Option<Vec<String>> {
         pv.push(word.to_string());
     }
     Some(pv)
+}
+
+fn parse_option_line(line: String) -> Result<UCI> {
+    // FIXME: handle `name`s with spaces (i.e. `option name Clear Hash type button`)
+    let words = vec!["name", "type"];
+    let values = parse_line_values(line.clone(), words)?;
+    return Ok(UCI::Option {
+        name: values["name"].clone().unwrap(),
+        opt_type: OptionType::new(values["type"].clone().unwrap(), line)?,
+    });
 }
 
 #[cfg(test)]

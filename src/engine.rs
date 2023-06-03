@@ -1,4 +1,4 @@
-use crate::parse::{parse_uci, UCI};
+use crate::parse::{parse_uci, OptionType, UCI};
 use anyhow::{bail, Result};
 use async_trait::async_trait;
 use std::{
@@ -31,6 +31,9 @@ pub trait ChessEngine: Sized {
 
     /// Retrieve the latest evaluation from the engine
     async fn get_evaluation(&mut self) -> Option<Evaluation>;
+
+    /// Retrieve the list of available options from the engine
+    async fn get_options(&mut self) -> Result<Vec<EngineOption>>;
 }
 
 /// Engine can be created to spawn any Chess Engine that implements the UCI Protocol
@@ -134,6 +137,11 @@ impl ChessEngine for Engine {
             None => None,
         };
     }
+
+    async fn get_options(&mut self) -> Result<Vec<EngineOption>> {
+        let options = self.state.options.lock().expect("couldn't acquire lock");
+        return Ok(options.clone());
+    }
 }
 
 /// Engine evaluation info
@@ -168,30 +176,14 @@ impl Default for Evaluation {
 impl Display for Evaluation {
     /// The alternate ("{:#}") operator will add the moves in pv to the output
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!(
+            "score: {} mate: {} depth: {} nodes: {} seldepth: {} multipv: {} time: {}",
+            self.score, self.mate, self.depth, self.nodes, self.seldepth, self.multipv, self.time
+        ))?;
         if f.alternate() {
-            f.write_fmt(format_args!(
-                "score: {} mate: {} depth: {} nodes: {} seldepth: {} multipv: {} time: {} \npv: {}",
-                self.score,
-                self.mate,
-                self.depth,
-                self.nodes,
-                self.seldepth,
-                self.multipv,
-                self.time,
-                self.pv.join(", ")
-            ))
-        } else {
-            f.write_fmt(format_args!(
-                "score: {} mate: {} depth: {} nodes: {} seldepth: {} multipv: {} time: {}",
-                self.score,
-                self.mate,
-                self.depth,
-                self.nodes,
-                self.seldepth,
-                self.multipv,
-                self.time
-            ))
+            f.write_fmt(format_args!("\npv: {}", self.pv.join(", ")))?;
         }
+        Ok(())
     }
 }
 
@@ -204,22 +196,33 @@ enum EngineStateEnum {
     Thinking,
 }
 
+#[derive(PartialEq, Debug, Clone)]
+pub struct EngineOption {
+    name: String,
+    opt_type: OptionType,
+}
+
 /// Engine state handler with async stdout parsing
 struct EngineState {
     state: Arc<Mutex<EngineStateEnum>>,
     evaluation: Arc<Mutex<Option<Evaluation>>>,
+    options: Arc<Mutex<Vec<EngineOption>>>,
 }
 
 impl EngineState {
     async fn new(stdout: ChildStdout) -> Self {
         let ev = Arc::new(Mutex::new(None));
         let state = Arc::new(Mutex::new(EngineStateEnum::Uninitialized));
+        let options = Arc::new(Mutex::new(Vec::new()));
         let stdout = BufReader::new(stdout);
         let engstate = EngineState {
             state: state.clone(),
             evaluation: ev.clone(),
+            options: options.clone(),
         };
-        tokio::spawn(async move { Self::process_stdout(stdout, state.clone(), ev.clone()).await });
+        tokio::spawn(async move {
+            Self::process_stdout(stdout, state.clone(), ev.clone(), options.clone()).await
+        });
         return engstate;
     }
 
@@ -227,6 +230,7 @@ impl EngineState {
         mut stdout: BufReader<ChildStdout>,
         state: Arc<Mutex<EngineStateEnum>>,
         ev: Arc<Mutex<Option<Evaluation>>>,
+        options: Arc<Mutex<Vec<EngineOption>>>,
     ) {
         loop {
             let mut str = String::new();
@@ -266,6 +270,10 @@ impl EngineState {
                         pv: pv.unwrap_or(prev_ev.pv.clone()),
                         time: time.unwrap_or(prev_ev.time),
                     });
+                }
+                Ok(UCI::Option { name, opt_type }) => {
+                    let mut options = options.lock().expect("couldn't aquire options lock");
+                    options.push(EngineOption { name, opt_type });
                 }
                 _ => continue,
             }
