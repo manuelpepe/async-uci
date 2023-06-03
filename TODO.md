@@ -1,0 +1,14 @@
+- [x] implement `start_uci` 
+- [x] implement `new_game`
+- [x] implement `set_position`
+- [x] implement `go_infinite`
+- [x] read stdout in separate task
+- [x] implement `get_evaluation`
+- [x] improve message handling from engine
+- [x] Move engine uci parsing outside of `EngineState`
+- [ ] implement engine option reading
+- [ ] implement engine option setting
+- [ ] implement MultiPV state
+- [ ] implement MultiPV parsing
+
+- [ ] More stuff?

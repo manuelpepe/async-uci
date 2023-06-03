@@ -1,6 +1,0 @@
-- [x] implement `start_uci` 
-- [x] implement `new_game`
-- [x] implement `set_position`
-- [x] implement `go_infinite`
-- [x] read stdout in separate task
-- [] improve message handling from engine
