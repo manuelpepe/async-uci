@@ -170,7 +170,7 @@ impl Display for Evaluation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if f.alternate() {
             f.write_fmt(format_args!(
-                "score: {} mate: {} depth: {} nodes: {} seldepth: {} multipv: {} time: {} \npv: {:?}",
+                "score: {} mate: {} depth: {} nodes: {} seldepth: {} multipv: {} time: {} \npv: {}",
                 self.score,
                 self.mate,
                 self.depth,
@@ -178,7 +178,7 @@ impl Display for Evaluation {
                 self.seldepth,
                 self.multipv,
                 self.time,
-                self.pv
+                self.pv.join(", ")
             ))
         } else {
             f.write_fmt(format_args!(
@@ -214,58 +214,62 @@ impl EngineState {
     async fn new(stdout: ChildStdout) -> Self {
         let ev = Arc::new(Mutex::new(None));
         let state = Arc::new(Mutex::new(EngineStateEnum::Uninitialized));
-        let mut stdout = BufReader::new(stdout);
+        let stdout = BufReader::new(stdout);
         let engstate = EngineState {
             state: state.clone(),
             evaluation: ev.clone(),
         };
-        let ev = ev.clone();
-        let state = state.clone();
-        tokio::spawn(async move {
-            loop {
-                let mut str = String::new();
-                stdout.read_line(&mut str).await.unwrap();
-                match parse_uci(str) {
-                    Ok(UCI::UciOk) => {
-                        let mut state = state.lock().expect("couldn't aquire state lock");
-                        *state = EngineStateEnum::Initialized;
-                    }
-                    Ok(UCI::ReadyOk) => {
-                        let mut state = state.lock().expect("couldn't aquire state lock");
-                        *state = EngineStateEnum::Ready;
-                    }
-                    Ok(UCI::Info {
-                        cp,
-                        mate,
-                        depth,
-                        nodes,
-                        seldepth,
-                        time,
-                        multipv,
-                        pv,
-                    }) => {
-                        let mut ev = ev.lock().expect("couldn't aquire ev lock");
-                        let def_ev = Evaluation::default();
-                        let prev_ev = match ev.as_ref() {
-                            Some(ev) => ev,
-                            None => &def_ev,
-                        };
-                        *ev = Some(Evaluation {
-                            score: cp.unwrap_or(prev_ev.score),
-                            mate: mate.unwrap_or(prev_ev.mate),
-                            depth: depth.unwrap_or(prev_ev.depth),
-                            nodes: nodes.unwrap_or(prev_ev.nodes),
-                            seldepth: seldepth.unwrap_or(prev_ev.seldepth),
-                            multipv: multipv.unwrap_or(prev_ev.multipv),
-                            pv: pv.unwrap_or(prev_ev.pv.clone()),
-                            time: time.unwrap_or(prev_ev.time),
-                        });
-                    }
-                    _ => continue,
-                }
-            }
-        });
+        tokio::spawn(async move { Self::process_stdout(stdout, state.clone(), ev.clone()).await });
         return engstate;
+    }
+
+    async fn process_stdout(
+        mut stdout: BufReader<ChildStdout>,
+        state: Arc<Mutex<EngineStateEnum>>,
+        ev: Arc<Mutex<Option<Evaluation>>>,
+    ) {
+        loop {
+            let mut str = String::new();
+            stdout.read_line(&mut str).await.unwrap();
+            match parse_uci(str) {
+                Ok(UCI::UciOk) => {
+                    let mut state = state.lock().expect("couldn't aquire state lock");
+                    *state = EngineStateEnum::Initialized;
+                }
+                Ok(UCI::ReadyOk) => {
+                    let mut state = state.lock().expect("couldn't aquire state lock");
+                    *state = EngineStateEnum::Ready;
+                }
+                Ok(UCI::Info {
+                    cp,
+                    mate,
+                    depth,
+                    nodes,
+                    seldepth,
+                    time,
+                    multipv,
+                    pv,
+                }) => {
+                    let mut ev = ev.lock().expect("couldn't aquire ev lock");
+                    let def_ev = Evaluation::default();
+                    let prev_ev = match ev.as_ref() {
+                        Some(ev) => ev,
+                        None => &def_ev,
+                    };
+                    *ev = Some(Evaluation {
+                        score: cp.unwrap_or(prev_ev.score),
+                        mate: mate.unwrap_or(prev_ev.mate),
+                        depth: depth.unwrap_or(prev_ev.depth),
+                        nodes: nodes.unwrap_or(prev_ev.nodes),
+                        seldepth: seldepth.unwrap_or(prev_ev.seldepth),
+                        multipv: multipv.unwrap_or(prev_ev.multipv),
+                        pv: pv.unwrap_or(prev_ev.pv.clone()),
+                        time: time.unwrap_or(prev_ev.time),
+                    });
+                }
+                _ => continue,
+            }
+        }
     }
 }
 
