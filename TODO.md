@@ -9,9 +9,8 @@
 - [x] improve message handling from engine
 - [x] move engine uci parsing outside of `EngineState`
 - [x] implement engine option reading
-- [ ] implement engine option setting
-- [ ] implement MultiPV state
-- [ ] implement MultiPV parsing
+- [x] implement engine option setting
+- [x] implement MultiPV (calculate multiple lines)
 - [ ] more stuff?
 
 

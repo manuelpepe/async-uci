@@ -14,15 +14,16 @@ async fn main() -> Result<()> {
     // TODO: Load from env
     let engpath =
         String::from("/root/rust/something_chess/res/stockfish/stockfish-ubuntu-20.04-x86-64");
-    let mut sf = spawn_engine(engpath, args.fen).await?;
+    let mut sf = spawn_engine(engpath, args.fen, args.lines.to_string()).await?;
     print_options(&mut sf).await?;
     stream_engine_eval(&mut sf, args.show_moves).await?;
     Ok(())
 }
 
-async fn spawn_engine(path: String, fen: String) -> Result<Engine> {
+async fn spawn_engine(path: String, fen: String, lines: String) -> Result<Engine> {
     let mut eng = Engine::new(&path).await?;
     eng.start_uci().await?;
+    eng.set_option("MultiPV".to_string(), lines).await?;
     eng.new_game().await?;
     eng.set_position(&fen).await?;
     eng.go_infinite().await?;

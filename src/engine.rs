@@ -34,6 +34,9 @@ pub trait ChessEngine: Sized {
 
     /// Retrieve the list of available options from the engine
     async fn get_options(&mut self) -> Result<Vec<EngineOption>>;
+
+    /// Set an option in the engine
+    async fn set_option(&mut self, option: String, value: String) -> Result<()>;
 }
 
 /// Engine can be created to spawn any Chess Engine that implements the UCI Protocol
@@ -140,7 +143,12 @@ impl ChessEngine for Engine {
 
     async fn get_options(&mut self) -> Result<Vec<EngineOption>> {
         let options = self.state.options.lock().expect("couldn't acquire lock");
-        return Ok(options.clone());
+        Ok(options.clone())
+    }
+
+    async fn set_option(&mut self, option: String, value: String) -> Result<()> {
+        let cmd = format!("setoption name {} value {}\n", option, value);
+        self.send_command(cmd).await
     }
 }
 

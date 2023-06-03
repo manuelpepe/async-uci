@@ -1,6 +1,6 @@
 use clap::Parser;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about)]
 pub struct CLIArgs {
     /// FEN string of the position to search
@@ -11,4 +11,8 @@ pub struct CLIArgs {
     /// Wether moves will be printed or not
     #[arg(short = 'm', long)]
     pub show_moves: bool,
+
+    /// Amount of lines to process, each line spawns a new engine process.
+    #[arg(short, long, default_value = "1")]
+    pub lines: usize,
 }
