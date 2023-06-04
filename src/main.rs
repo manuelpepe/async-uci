@@ -27,9 +27,10 @@ async fn main() -> Result<()> {
             max_depth,
             max_time,
             mate_in,
+            options,
         } => {
             search(
-                engpath, fen, lines, show_moves, max_depth, max_time, mate_in,
+                engpath, fen, lines, show_moves, max_depth, max_time, mate_in, options,
             )
             .await?
         }
@@ -56,8 +57,9 @@ async fn search(
     max_depth: usize,
     max_time: usize,
     mate_in: usize,
+    options: Vec<String>,
 ) -> Result<()> {
-    let mut sf = spawn_engine(engpath, fen, lines.to_string()).await?;
+    let mut sf = spawn_engine(engpath, fen, lines.to_string(), options).await?;
     if max_depth > 0 {
         sf.go_depth(max_depth).await?;
     } else if max_time > 0 {
@@ -71,10 +73,20 @@ async fn search(
     Ok(())
 }
 
-async fn spawn_engine(path: String, fen: String, lines: String) -> Result<Engine> {
+async fn spawn_engine(
+    path: String,
+    fen: String,
+    lines: String,
+    options: Vec<String>,
+) -> Result<Engine> {
     let mut eng = Engine::new(&path).await?;
     eng.start_uci().await?;
     eng.set_option("MultiPV".to_string(), lines).await?;
+    for opt in options {
+        let name = opt.split('=').next().unwrap();
+        let value = opt.split('=').nth(1).unwrap();
+        eng.set_option(name.to_string(), value.to_string()).await?;
+    }
     eng.new_game().await?;
     eng.set_position(&fen).await?;
     Ok(eng)

@@ -17,7 +17,7 @@
 - [x] cli (search): new param `--max-depth` to search up to a set depth 
 - [x] cli (search): new param `--max-time` to search for a set time 
 - [x] cli (search): new param `--mate-in` to search for a mate in a certain number of moves 
-- [ ] cli (search): new param `--option/-O` to pass engine options
+- [x] cli (search): new param `--option/-O` to pass engine options
 - [ ] parse `bestmove <m1> ponder <m2>` on search end
 - [ ] more stuff?
 

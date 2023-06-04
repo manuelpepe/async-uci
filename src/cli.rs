@@ -30,7 +30,9 @@ pub enum Subcommands {
         #[arg(short = 'm', long)]
         show_moves: bool,
 
-        /// Amount of lines to process, each line spawns a new engine process.
+        /// Amount of lines to process, similar to setting `-O MultiPV=<n>`.
+        /// Note: Using `--lines 3 -O MultiPV=2` will make the engine calculate 2 lines, as -O takes
+        /// precedence over this option.
         #[arg(short, long, default_value = "1")]
         lines: usize,
 
@@ -45,6 +47,12 @@ pub enum Subcommands {
         /// Search for a mate in a certain number of moves.
         #[arg(short = 'M', long, default_value = "0")]
         mate_in: usize,
+
+        /// Specify options to pass to the engine. Can be used multiple times for multiple options.
+        /// i.e: '-O Hash=128 -O Threads=4'.
+        /// See 'list-options' for available options.
+        #[arg(short = 'O', long = "option")]
+        options: Vec<String>,
     },
 
     /// List the available options for the current engine
