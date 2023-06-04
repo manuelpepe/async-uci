@@ -29,6 +29,18 @@ pub trait ChessEngine: Sized {
     /// Notify engine to search for best move until explicitly stopped
     async fn go_infinite(&mut self) -> Result<()>;
 
+    /// Notify engine to search for best move to a certain depth
+    async fn go_depth(&mut self, plies: usize) -> Result<()>;
+
+    /// Notify engine to search for best move for a set time
+    async fn go_time(&mut self, ms: usize) -> Result<()>;
+
+    /// Notify engine to search for a mate in a certain number of moves
+    async fn go_mate(&mut self, mate_in: usize) -> Result<()>;
+
+    /// Notify engine to stop current search
+    async fn stop(&mut self) -> Result<()>;
+
     /// Retrieve the latest evaluation from the engine
     async fn get_evaluation(&mut self) -> Option<Evaluation>;
 
@@ -84,6 +96,14 @@ impl Engine {
     async fn expect_readyok(&mut self) -> Result<()> {
         self.expect_state(EngineStateEnum::Ready).await
     }
+
+    /// Change current engine state
+    async fn set_state(&mut self, new_state: EngineStateEnum) -> Result<()> {
+        // TODO: Return old state
+        let mut state = self.state.state.lock().expect("couldn't acquire lock");
+        *state = new_state;
+        Ok(())
+    }
 }
 
 /// Spawn a subprocess and return handles for stdin and stdout
@@ -118,7 +138,11 @@ impl ChessEngine for Engine {
     }
 
     async fn new_game(&mut self) -> Result<()> {
-        self.send_command("ucinewgame\n".to_string()).await
+        self.send_command("ucinewgame\n".to_string()).await?;
+        self.set_state(EngineStateEnum::Initialized).await?;
+        self.send_command("isready\n".to_string()).await?;
+        self.expect_readyok().await?;
+        Ok(())
     }
 
     async fn set_position(&mut self, fen: &str) -> Result<()> {
@@ -128,8 +152,34 @@ impl ChessEngine for Engine {
 
     async fn go_infinite(&mut self) -> Result<()> {
         self.send_command("go infinite\n".to_string()).await?;
-        let mut s = self.state.state.lock().expect("couldn't acquire lock");
-        *s = EngineStateEnum::Thinking;
+        self.set_state(EngineStateEnum::Thinking).await?;
+        Ok(())
+    }
+
+    async fn go_depth(&mut self, depth: usize) -> Result<()> {
+        self.send_command(format!("go depth {}\n", depth).to_string())
+            .await?;
+        self.set_state(EngineStateEnum::Thinking).await?;
+        Ok(())
+    }
+
+    async fn go_time(&mut self, ms: usize) -> Result<()> {
+        self.send_command(format!("go movetime {}\n", ms).to_string())
+            .await?;
+        self.set_state(EngineStateEnum::Thinking).await?;
+        Ok(())
+    }
+
+    async fn go_mate(&mut self, mate_in: usize) -> Result<()> {
+        self.send_command(format!("go mate {}\n", mate_in).to_string())
+            .await?;
+        self.set_state(EngineStateEnum::Thinking).await?;
+        Ok(())
+    }
+
+    async fn stop(&mut self) -> Result<()> {
+        self.send_command("stop\n".to_string()).await?;
+        self.set_state(EngineStateEnum::Initialized).await?;
         Ok(())
     }
 
