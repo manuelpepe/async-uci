@@ -1,6 +1,6 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::Parser;
-use cli::CLIArgs;
+use cli::{CLIArgs, Subcommands};
 use engine::{ChessEngine, Engine, Evaluation};
 use tokio::task::yield_now;
 
@@ -11,12 +11,39 @@ mod parse;
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = CLIArgs::parse();
-    // TODO: Load from env
-    let engpath =
-        String::from("/root/rust/something_chess/res/stockfish/stockfish-ubuntu-20.04-x86-64");
-    let mut sf = spawn_engine(engpath, args.fen, args.lines.to_string()).await?;
+    let engpath = match args.global.engine_path {
+        Some(path) => path,
+        None => match std::env::var("CHESS_ENGINE_PATH") {
+            Ok(path) => path,
+            Err(_) => bail!("Couldn't find engine location. set CHESS_ENGINE_PATH environment variable or pass in --engine-path/-P"),
+        },
+    };
+    println!("Using engine from: {engpath}");
+    match args.command {
+        Subcommands::Search {
+            fen,
+            show_moves,
+            lines,
+        } => search(engpath, fen, lines, show_moves).await?,
+        Subcommands::ListOptions {} => list_options(engpath).await?,
+    };
+    Ok(())
+}
+
+async fn list_options(engpath: String) -> Result<()> {
+    let mut eng = Engine::new(&engpath).await?;
+    eng.start_uci().await?;
+    let options = eng.get_options().await?;
+    for opt in options {
+        println!("{:?}", opt);
+    }
+    Ok(())
+}
+
+async fn search(engpath: String, fen: String, lines: usize, show_moves: bool) -> Result<()> {
+    let mut sf = spawn_engine(engpath, fen, lines.to_string()).await?;
     print_options(&mut sf).await?;
-    stream_engine_eval(&mut sf, args.show_moves).await?;
+    stream_engine_eval(&mut sf, show_moves).await?;
     Ok(())
 }
 
