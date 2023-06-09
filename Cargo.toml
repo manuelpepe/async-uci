@@ -1,7 +1,12 @@
 [package]
-name = "something_chess"
+name = "async-uci"
+description = "An async UCI Implementation over the tokio runtime."
 version = "0.1.0"
 edition = "2021"
+homepage = "https://github.com/manuelpepe/rust-practice-chess"
+repository = "https://github.com/manuelpepe/rust-practice-chess"
+readme = "README.md"
+license-file = "LICENSE"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
