@@ -201,14 +201,14 @@ impl ChessEngine for Engine {
 /// Engine evaluation info
 #[derive(Debug, Clone, PartialEq)]
 pub struct Evaluation {
-    score: isize,
-    mate: isize,
-    depth: isize,
-    nodes: isize,
-    seldepth: isize,
-    multipv: isize,
-    pv: Vec<String>,
-    time: isize,
+    pub score: isize,
+    pub mate: isize,
+    pub depth: isize,
+    pub nodes: isize,
+    pub seldepth: isize,
+    pub multipv: isize,
+    pub pv: Vec<String>,
+    pub time: isize,
 }
 
 impl Default for Evaluation {
@@ -252,8 +252,8 @@ enum EngineStateEnum {
 
 #[derive(PartialEq, Debug, Clone)]
 pub struct EngineOption {
-    name: String,
-    opt_type: OptionType,
+    pub name: String,
+    pub opt_type: OptionType,
 }
 
 /// Engine state handler with async stdout parsing
