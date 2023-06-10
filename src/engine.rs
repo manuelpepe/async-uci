@@ -13,10 +13,7 @@ use tokio::{
 
 /// ChessEngine trait can be implemented for structures that implement the UCI Protocol
 #[async_trait]
-pub trait ChessEngine: Sized {
-    /// Create new engine from executable
-    async fn new(exe_path: &str) -> Result<Self>;
-
+pub trait ChessEngine {
     /// Start the UCI Protocol
     async fn start_uci(&mut self) -> Result<()>;
 
@@ -59,6 +56,15 @@ pub struct Engine {
 }
 
 impl Engine {
+    pub async fn new(exe_path: &str) -> Result<Self> {
+        let (proc, stdin, stdout) = spawn_process(exe_path)?;
+        let state = EngineState::new(stdout).await;
+        Ok(Engine {
+            state: state,
+            stdin: stdin,
+            _proc: proc,
+        })
+    }
     /// Send a command to the engine
     async fn send_command(&mut self, command: String) -> Result<()> {
         self.stdin.write_all(command.as_bytes()).await?;
@@ -119,16 +125,6 @@ fn spawn_process(exe_path: &str) -> Result<(Child, ChildStdin, ChildStdout)> {
 
 #[async_trait]
 impl ChessEngine for Engine {
-    async fn new(exe_path: &str) -> Result<Self> {
-        let (proc, stdin, stdout) = spawn_process(exe_path)?;
-        let state = EngineState::new(stdout).await;
-        Ok(Engine {
-            state: state,
-            stdin: stdin,
-            _proc: proc,
-        })
-    }
-
     async fn start_uci(&mut self) -> Result<()> {
         self.send_command("uci\n".to_string()).await?;
         self.expect_uciok().await?;
